@@ -50,6 +50,7 @@ import os
 import csv
 import sys
 from unidecode import unidecode
+from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 # seconds to wait between page requests
 delay = 5
@@ -201,15 +202,27 @@ def write_fic_to_csv(fic_id, only_first_chap, lang, include_bookmarks, metadata_
 		url = url + '&amp;view_full_work=true'
 	headers = {'user-agent' : header_info}
 	status = 429
+	exception_retry_count = 10
 	while 429 == status:
-		req = requests.get(url, headers=headers)
+		try:
+			req = requests.get(url, headers=headers)
+		except (ConnectionError, MaxRetryError, NewConnectionError) as e:
+			# if there's intermittent connectivity issues, this will try again up to 30 minutes.
+			errorwriter.writerow([fic_id, "ConnectionError"])
+			if exception_retry_count <= 0:
+				raise Exception("Connection Error retry limit reached").with_traceback(e.__traceback__)
+			print("Connection error while making request. Trying again in 3 minutes")
+			exception_retry_count -= 1
+			import traceback
+			traceback.print_exc()
+			time.sleep(60 * 3)
+
 		status = req.status_code
 		if 429 == status:
 			error_row = [fic_id] + ["Status: 429"]
 			errorwriter.writerow(error_row)
-			print("Request answered with Status-Code 429")
-			print("Trying again in 1 minute...")
-			time.sleep(60)
+			print("Request answered with Status-Code 429, retrying...")
+			time.sleep(delay * 2)
 
 	if 400 <= status:
 		print("Error scraping ", fic_id, "Status ", str(status))
